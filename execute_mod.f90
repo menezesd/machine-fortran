@@ -23,6 +23,9 @@ module execute_mod
   integer :: stream3_table(16) = 0     ! nested stream 3 tables
   integer :: stream3_pos(16) = 0       ! current write position in each
 
+  ! Window state (0 = lower/main, 1 = upper/status)
+  integer :: current_window = 0
+
   ! Undo state
   integer(1), allocatable :: undo_memory(:)
   integer, allocatable :: undo_stack(:)
@@ -35,6 +38,7 @@ module execute_mod
   integer :: undo_stream3_depth = 0
   integer :: undo_stream3_table(16) = 0
   integer :: undo_stream3_pos(16) = 0
+  integer :: undo_window = 0
   logical :: undo_valid = .false.
 
 contains
@@ -46,6 +50,7 @@ contains
     output_stream1 = .true.
     output_stream2 = .false.
     stream3_depth = 0
+    current_window = 0
     undo_valid = .false.
   end subroutine exec_init
 
@@ -96,7 +101,7 @@ contains
       return
     end if
 
-    if (output_stream1) then
+    if (output_stream1 .and. current_window == 0) then
       write(*,'(A)', advance='no') ch
     end if
   end subroutine output_char
@@ -591,12 +596,11 @@ contains
           call var_write(operands(1), val)
 
         case (10) ! split_window
-          ! Stub
+          ! Track split but don't render upper window
           continue
 
         case (11) ! set_window
-          ! Stub
-          continue
+          current_window = operands(1)
 
         case (12) ! call_vs2
           if (instr%num_operands > 1) then
@@ -1254,12 +1258,13 @@ contains
       undo_frames = frames(1:undo_fp)
     end if
 
-    ! Save output stream state
+    ! Save output stream and window state
     undo_stream1 = output_stream1
     undo_stream2 = output_stream2
     undo_stream3_depth = stream3_depth
     undo_stream3_table = stream3_table
     undo_stream3_pos = stream3_pos
+    undo_window = current_window
 
     undo_valid = .true.
     call var_write(store_var, 1)  ! success
@@ -1283,12 +1288,13 @@ contains
     if (allocated(undo_frames)) frames(1:undo_fp) = undo_frames
     call stack_restore_state(undo_sp, undo_fp)
 
-    ! Restore output streams
+    ! Restore output streams and window state
     output_stream1 = undo_stream1
     output_stream2 = undo_stream2
     stream3_depth = undo_stream3_depth
     stream3_table = undo_stream3_table
     stream3_pos = undo_stream3_pos
+    current_window = undo_window
 
     ! Restore PC and write result into the *original* save_undo's store variable
     exec_pc = undo_pc
