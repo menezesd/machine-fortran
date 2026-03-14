@@ -25,6 +25,16 @@ module execute_mod
 
   ! Undo state
   integer(1), allocatable :: undo_memory(:)
+  integer, allocatable :: undo_stack(:)
+  type(call_frame), allocatable :: undo_frames(:)
+  integer :: undo_pc = 0
+  integer :: undo_sp = 0
+  integer :: undo_fp = 0
+  logical :: undo_stream1 = .true.
+  logical :: undo_stream2 = .false.
+  integer :: undo_stream3_depth = 0
+  integer :: undo_stream3_table(16) = 0
+  integer :: undo_stream3_pos(16) = 0
   logical :: undo_valid = .false.
 
 contains
@@ -478,8 +488,8 @@ contains
           call do_restore(instr)
 
         case (7)  ! restart
-          ! Reload initial dynamic memory from story file
-          call mem_load_story('', dummy)  ! TODO: remember filename
+          call mem_load_story(mem_story_filename, dummy)
+          call header_init()
           call exec_init()
 
         case (8)  ! ret_popped
@@ -1214,28 +1224,71 @@ contains
     call tokenise_input(text_buf, parse_buf, tlen)
   end subroutine do_tokenise
 
-  ! Save undo state
+  ! Save undo state (full snapshot: memory, PC, stack, frames, streams)
   subroutine do_save_undo(store_var)
     integer, intent(in) :: store_var
 
+    ! Save dynamic memory
     if (allocated(undo_memory)) deallocate(undo_memory)
     allocate(undo_memory(0:mem_static_base-1))
     undo_memory = memory(0:mem_static_base-1)
+
+    ! Save PC (already pointing past save_undo instruction + store byte)
+    undo_pc = exec_pc
+
+    ! Save stack
+    call stack_save_state(undo_sp, undo_fp)
+    if (allocated(undo_stack)) deallocate(undo_stack)
+    if (undo_sp > 0) then
+      allocate(undo_stack(undo_sp))
+      undo_stack = stack(1:undo_sp)
+    end if
+    if (allocated(undo_frames)) deallocate(undo_frames)
+    if (undo_fp > 0) then
+      allocate(undo_frames(undo_fp))
+      undo_frames = frames(1:undo_fp)
+    end if
+
+    ! Save output stream state
+    undo_stream1 = output_stream1
+    undo_stream2 = output_stream2
+    undo_stream3_depth = stream3_depth
+    undo_stream3_table = stream3_table
+    undo_stream3_pos = stream3_pos
+
     undo_valid = .true.
     call var_write(store_var, 1)  ! success
   end subroutine do_save_undo
 
-  ! Restore undo state
+  ! Restore undo state (full snapshot)
   subroutine do_restore_undo(store_var)
     integer, intent(in) :: store_var
+    integer :: saved_store_var
 
     if (.not. undo_valid) then
       call var_write(store_var, 0)  ! fail
       return
     end if
 
+    ! Restore dynamic memory
     memory(0:mem_static_base-1) = undo_memory
-    call var_write(store_var, 2)  ! restored
+
+    ! Restore stack
+    if (allocated(undo_stack)) stack(1:undo_sp) = undo_stack
+    if (allocated(undo_frames)) frames(1:undo_fp) = undo_frames
+    call stack_restore_state(undo_sp, undo_fp)
+
+    ! Restore output streams
+    output_stream1 = undo_stream1
+    output_stream2 = undo_stream2
+    stream3_depth = undo_stream3_depth
+    stream3_table = undo_stream3_table
+    stream3_pos = undo_stream3_pos
+
+    ! Restore PC and write result into the *original* save_undo's store variable
+    exec_pc = undo_pc
+    saved_store_var = mem_read_byte(undo_pc - 1)
+    call var_write(saved_store_var, 2)  ! 2 = restored
   end subroutine do_restore_undo
 
   ! Prompt user for save filename and perform save
