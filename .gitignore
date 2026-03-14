@@ -1,0 +1,7 @@
+*.o
+*.mod
+*.z3
+*.z5
+*.z8
+*.qzl
+zmachine
