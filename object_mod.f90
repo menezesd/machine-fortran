@@ -13,7 +13,7 @@ module object_mod
             obj_get_prop, obj_get_prop_addr, obj_get_next_prop, &
             obj_get_prop_len, obj_put_prop, &
             obj_insert, obj_remove, obj_print_short_name, &
-            obj_get_prop_default
+            obj_short_name_addr, obj_get_prop_default
 
   ! V1-3: 31 attributes, 4 bytes attrs, 1-byte parent/sibling/child, property addr = 2 bytes
   ! Object entry size: 4 + 3*1 + 2 = 9 bytes
@@ -160,17 +160,31 @@ contains
     end if
   end function obj_prop_table
 
-  ! Print object short name
-  subroutine obj_print_short_name(obj)
+  ! Get the address of object's short name text (Z-encoded)
+  ! Returns the address and whether a name exists
+  subroutine obj_short_name_addr(obj, addr, has_name)
     integer, intent(in) :: obj
-    integer :: prop_addr, name_len, dummy
-    character(len=256) :: name
+    integer, intent(out) :: addr
+    logical, intent(out) :: has_name
+    integer :: prop_addr, name_len
 
     prop_addr = obj_prop_table(obj)
-    ! First byte is the text-length (in words) of the short name
     name_len = mem_read_byte(prop_addr)
-    if (name_len > 0) then
-      call text_decode(prop_addr + 1, name, name_len, dummy)
+    has_name = (name_len > 0)
+    addr = prop_addr + 1
+  end subroutine obj_short_name_addr
+
+  ! Print object short name (legacy, bypasses output streams)
+  subroutine obj_print_short_name(obj)
+    integer, intent(in) :: obj
+    integer :: addr, dummy
+    logical :: has_name
+    character(len=256) :: name
+    integer :: name_len
+
+    call obj_short_name_addr(obj, addr, has_name)
+    if (has_name) then
+      call text_decode(addr, name, name_len, dummy)
       write(*,'(A)', advance='no') name(1:name_len)
     end if
   end subroutine obj_print_short_name

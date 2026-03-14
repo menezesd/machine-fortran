@@ -426,7 +426,12 @@ contains
           call obj_remove(a)
 
         case (10) ! print_obj
-          call obj_print_short_name(a)
+          block
+            integer :: name_addr
+            logical :: has_name
+            call obj_short_name_addr(a, name_addr, has_name)
+            if (has_name) call print_zstr(name_addr, dummy)
+          end block
 
         case (11) ! ret
           call return_routine(a)
