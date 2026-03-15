@@ -92,11 +92,14 @@ contains
     val = iand(int(memory(addr), 4), 255)
   end function mem_read_byte
 
-  ! Write byte to address (dynamic memory only)
+  ! Write byte to address
+  ! The spec says static memory is read-only, but games like Balances
+  ! modify dictionary entries (in static memory) to add verb flags for
+  ! dynamically learned spells. Real interpreters allow this.
   subroutine mem_write_byte(addr, val)
     integer, intent(in) :: addr, val
 
-    if (addr < 0 .or. addr >= mem_static_base) then
+    if (addr < 0 .or. addr >= mem_size) then
       return
     end if
     memory(addr) = int(val, 1)
