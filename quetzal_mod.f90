@@ -370,7 +370,7 @@ contains
     end if
 
     ! Save Flags 2 before restore (spec says to preserve it)
-    saved_flags2 = mem_read_byte(16)
+    saved_flags2 = mem_read_word(16)
 
     ! Parse chunks
     got_ifhd = .false.
@@ -426,8 +426,9 @@ contains
       return
     end if
 
-    ! Restore preserved Flags 2
-    memory(16) = int(saved_flags2, 1)
+    ! Restore preserved Flags 2 (word at $10)
+    memory(16) = int(iand(ishft(saved_flags2, -8), 255), 1)
+    memory(17) = int(iand(saved_flags2, 255), 1)
 
     ! Re-set interpreter header fields
     call header_init()

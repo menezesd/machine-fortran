@@ -612,9 +612,9 @@ contains
         case (8)  ! push
           call stack_push(operands(1))
 
-        case (9)  ! pull
+        case (9)  ! pull (indirect variable reference)
           val = stack_pop()
-          call var_write(operands(1), val)
+          call var_indirect_write(operands(1), val)
 
         case (10) ! split_window
           ! Track split but don't render upper window
@@ -635,8 +635,13 @@ contains
           call call_routine(operands(1), args, num_args, instr%store_var)
 
         case (13) ! erase_window
-          ! Stub
-          continue
+          if (to_signed(operands(1)) == -1) then
+            ! Unsplit and clear: reset to lower window
+            current_window = 0
+          else if (to_signed(operands(1)) == -2) then
+            ! Clear without unsplitting
+            continue
+          end if
 
         case (14) ! erase_line
           continue
@@ -671,9 +676,14 @@ contains
             output_stream2 = .false.
           case (3)
             if (instr%num_operands >= 2) then
-              stream3_depth = stream3_depth + 1
-              stream3_table(stream3_depth) = operands(2)
-              stream3_pos(stream3_depth) = 0
+              if (stream3_depth >= 16) then
+                write(*,*) 'Error: stream 3 nesting overflow (max 16)'
+                exec_running = .false.
+              else
+                stream3_depth = stream3_depth + 1
+                stream3_table(stream3_depth) = operands(2)
+                stream3_pos(stream3_depth) = 0
+              end if
             end if
           case (-3)
             if (stream3_depth > 0) then
@@ -885,7 +895,13 @@ contains
       if (amount >= 0) then
         val = ishft(val, amount)
       else
-        val = ishft(val, amount)  ! arithmetic shift preserves sign
+        ! Arithmetic right shift: preserve sign bit
+        ! ishft does logical shift; manually fill sign bits
+        val = ishft(iand(operands(1), 65535), amount)
+        if (iand(operands(1), 32768) /= 0) then
+          ! Original was negative: fill vacated high bits with 1s
+          val = ior(val, iand(ishft(-1, 16 + amount), 65535))
+        end if
       end if
       call var_write(instr%store_var, iand(val, 65535))
 

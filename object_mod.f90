@@ -421,6 +421,7 @@ contains
     integer, intent(in) :: obj
     integer :: parent, child, prev, sib
 
+    if (obj == 0) return
     parent = obj_get_parent(obj)
     if (parent == 0) return
 
@@ -450,6 +451,7 @@ contains
   subroutine obj_insert(obj, dest)
     integer, intent(in) :: obj, dest
 
+    if (obj == 0) return
     call obj_remove(obj)
     call obj_set_sibling(obj, obj_get_child(dest))
     call obj_set_child(dest, obj)
