@@ -12,7 +12,7 @@ module text_mod
   character(len=26), parameter :: alpha0 = 'abcdefghijklmnopqrstuvwxyz'
   character(len=26), parameter :: alpha1 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
   ! A2 char 7 is the ZSCII escape, represented as '^' placeholder
-  character(len=26), parameter :: alpha2_default = '^' // char(13) // '0123456789.,!?_#' // "'" // '"/\-:()'
+  character(len=26), parameter :: alpha2_default = '^' // char(10) // '0123456789.,!?_#' // "'" // '"/\-:()'
 
   integer, parameter :: MAX_ZCHARS = 1024
 
@@ -45,7 +45,7 @@ contains
         ! Index into alpha2 (skip the escape at position 0)
         select case (idx)
         case (1)
-          ch = char(13)  ! newline
+          ch = char(10)  ! newline
         case default
           ch = alpha2_default(idx+1:idx+1)
         end select

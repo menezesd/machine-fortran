@@ -1001,26 +1001,34 @@ contains
   end subroutine do_read
 
   ! Tokenise input text into parse buffer
-  subroutine tokenise_input(text_addr, parse_addr, input_len)
+  subroutine tokenise_input(text_addr, parse_addr, input_len, alt_dict, no_overwrite)
     integer, intent(in) :: text_addr, parse_addr, input_len
+    integer, intent(in), optional :: alt_dict
+    logical, intent(in), optional :: no_overwrite
 
     integer :: max_tokens, num_tokens, text_start
     integer :: dict_addr, sep_count, separators(32)
     integer :: dict_entry_len, dict_num_entries, dict_entries_start
     integer :: pos, word_start, word_len, i
     character :: ch
-    logical :: is_sep
+    logical :: is_sep, skip_unknown
     character(len=10) :: word_buf
     integer :: encoded(3), enc_words, match_addr
 
+    skip_unknown = .false.
+    if (present(no_overwrite)) skip_unknown = no_overwrite
+
     dict_addr = hdr_dictionary
+    if (present(alt_dict) .and. alt_dict /= 0) dict_addr = alt_dict
     ! Read dictionary header
     sep_count = mem_read_byte(dict_addr)
     do i = 1, sep_count
       separators(i) = mem_read_byte(dict_addr + i)
     end do
     dict_entry_len = mem_read_byte(dict_addr + 1 + sep_count)
-    dict_num_entries = mem_read_word(dict_addr + 2 + sep_count)
+    ! num_entries is signed: negative means unsorted dictionary
+    dict_num_entries = to_signed(mem_read_word(dict_addr + 2 + sep_count))
+    if (dict_num_entries < 0) dict_num_entries = -dict_num_entries
     dict_entries_start = dict_addr + 4 + sep_count
 
     max_tokens = mem_read_byte(parse_addr)
@@ -1088,7 +1096,9 @@ contains
       ! Write to parse buffer
       num_tokens = num_tokens + 1
       i = parse_addr + 2 + (num_tokens - 1) * 4
-      call mem_write_word(i, match_addr)             ! dictionary address (0 if not found)
+      if (.not. skip_unknown .or. match_addr /= 0) then
+        call mem_write_word(i, match_addr)           ! dictionary address (0 if not found)
+      end if
       call mem_write_byte(i + 2, word_len)           ! word length
       call mem_write_byte(i + 3, word_start + (text_start - text_addr))  ! position in text buffer
     end do
@@ -1096,28 +1106,41 @@ contains
     call mem_write_byte(parse_addr + 1, num_tokens)
   end subroutine tokenise_input
 
-  ! Look up encoded word in dictionary
+  ! Look up encoded word in dictionary (binary search)
   function dict_lookup(encoded, enc_words, entries_start, entry_len, num_entries) result(addr)
     integer, intent(in) :: encoded(:), enc_words
     integer, intent(in) :: entries_start, entry_len, num_entries
     integer :: addr
-    integer :: i, j, eaddr, dict_word
-    logical :: match
+    integer :: lo, hi, mid, j, eaddr, dict_word, cmp
 
     addr = 0
-    do i = 1, num_entries
-      eaddr = entries_start + (i - 1) * entry_len
-      match = .true.
+    lo = 0
+    hi = num_entries - 1
+
+    do while (lo <= hi)
+      mid = (lo + hi) / 2
+      eaddr = entries_start + mid * entry_len
+
+      ! Compare encoded words lexicographically (unsigned)
+      cmp = 0
       do j = 1, enc_words
         dict_word = mem_read_word(eaddr + (j-1) * 2)
-        if (dict_word /= encoded(j)) then
-          match = .false.
+        if (dict_word < encoded(j)) then
+          cmp = -1
+          exit
+        else if (dict_word > encoded(j)) then
+          cmp = 1
           exit
         end if
       end do
-      if (match) then
+
+      if (cmp == 0) then
         addr = eaddr
         return
+      else if (cmp < 0) then
+        lo = mid + 1
+      else
+        hi = mid - 1
       end if
     end do
   end function dict_lookup
@@ -1214,10 +1237,15 @@ contains
   ! tokenise opcode (VAR:251)
   subroutine do_tokenise(operands, num_ops)
     integer, intent(in) :: operands(8), num_ops
-    integer :: text_buf, parse_buf, tlen, i
+    integer :: text_buf, parse_buf, tlen, i, alt_dict
+    logical :: no_overwrite
 
     text_buf = operands(1)
     parse_buf = operands(2)
+    alt_dict = 0
+    no_overwrite = .false.
+    if (num_ops >= 3) alt_dict = operands(3)
+    if (num_ops >= 4) no_overwrite = (operands(4) /= 0)
 
     ! Count text length
     if (hdr_version <= 4) then
@@ -1230,7 +1258,7 @@ contains
       tlen = mem_read_byte(text_buf + 1)
     end if
 
-    call tokenise_input(text_buf, parse_buf, tlen)
+    call tokenise_input(text_buf, parse_buf, tlen, alt_dict, no_overwrite)
   end subroutine do_tokenise
 
   ! Save undo state (full snapshot: memory, PC, stack, frames, streams)
