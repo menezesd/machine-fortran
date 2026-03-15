@@ -6,9 +6,9 @@ module stack_mod
   use header_mod, only: hdr_version, hdr_globals
   implicit none
   private
-  public :: stack_init, stack_push, stack_pop, stack_peek, &
+  public :: stack_init, stack_push, stack_pop, stack_peek, stack_poke, &
             frame_push, frame_pop, &
-            var_read, var_write, &
+            var_read, var_write, var_indirect_write, &
             stack_get_frame_id, stack_frame_count, &
             frame_arg_count, &
             stack_save_state, stack_restore_state, &
@@ -76,6 +76,16 @@ contains
     end if
     val = stack(sp)
   end function stack_peek
+
+  ! Write to top of stack in place (for indirect variable references)
+  subroutine stack_poke(val)
+    integer, intent(in) :: val
+    if (sp <= 0) then
+      write(*,*) 'Error: stack poke on empty stack'
+      return
+    end if
+    stack(sp) = iand(val, 65535)
+  end subroutine stack_poke
 
   ! Push a new routine call frame
   subroutine frame_push(return_pc, return_var, num_locals, init_vals, &
@@ -168,6 +178,18 @@ contains
       call mem_write_word(gaddr, iand(val, 65535))
     end if
   end subroutine var_write
+
+  ! Write a variable with indirect semantics (var 0 = poke stack top, not push)
+  ! Used by @store, @inc, @dec, @inc_chk, @dec_chk, @pull
+  subroutine var_indirect_write(varnum, val)
+    integer, intent(in) :: varnum, val
+
+    if (varnum == 0) then
+      call stack_poke(val)
+    else
+      call var_write(varnum, val)
+    end if
+  end subroutine var_indirect_write
 
   function stack_get_frame_id() result(fid)
     integer :: fid

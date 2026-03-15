@@ -39,7 +39,7 @@ contains
     hdr_object_table  = mem_read_word(10)  ! $0A
     hdr_globals       = mem_read_word(12)  ! $0C
     hdr_static_base   = mem_read_word(14)  ! $0E
-    hdr_flags2        = mem_read_byte(16)  ! $10
+    hdr_flags2        = mem_read_word(16)  ! $10 (word, not byte)
     hdr_abbrev_table  = mem_read_word(24)  ! $18
     hdr_file_length   = mem_read_word(26)  ! $1A
     hdr_checksum      = mem_read_word(28)  ! $1C
@@ -85,6 +85,27 @@ contains
       call mem_write_word(36, 25)  ! $24 - screen height (units)
       call mem_write_byte(38, 1)   ! $26 - font width
       call mem_write_byte(39, 1)   ! $27 - font height
+    end if
+
+    ! Set Flags 1 - interpreter capabilities
+    if (hdr_version <= 3) then
+      ! V1-3: bit 4=status line not available, bit 5=split screen, bit 6=variable-pitch default
+      ! We stub status line and don't split, so set bit 4, clear bits 5-6
+      hdr_flags1 = ior(iand(hdr_flags1, int(Z'0F')), ishft(1, 4))
+      call mem_write_byte(1, hdr_flags1)
+    else
+      ! V4+: bit 0=colors, 2=bold, 3=italic, 4=fixed-space, 5=sound, 7=timed input
+      ! Terminal supports bold/italic/fixed, not colors/sound/timed
+      hdr_flags1 = ior(iand(hdr_flags1, int(Z'42')), ior(ishft(1,2), ior(ishft(1,3), ishft(1,4))))
+      call mem_write_byte(1, hdr_flags1)
+    end if
+
+    ! Set Flags 2 - clear unsupported request bits
+    if (hdr_version >= 5) then
+      hdr_flags2 = mem_read_word(16)
+      ! Clear bits: 3=pictures, 5=mouse, 7=sound, 8=menus
+      hdr_flags2 = iand(hdr_flags2, not(ior(ishft(1,3), ior(ishft(1,5), ior(ishft(1,7), ishft(1,8))))))
+      call mem_write_word(16, hdr_flags2)
     end if
 
     ! Set standard revision to 1.1

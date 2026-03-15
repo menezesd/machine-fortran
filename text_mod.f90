@@ -315,7 +315,7 @@ contains
 
       ! Check A2 alphabet (skip index 0 which is the ZSCII escape)
       do j = 2, 26
-        if (ch == alpha2_default(j+1:j+1)) then
+        if (ch == alpha2_default(j:j)) then
           nzc = nzc + 1
           zchars(nzc) = 5  ! shift to A2
           if (nzc < max_zchars) then

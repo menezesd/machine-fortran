@@ -276,14 +276,22 @@ contains
         case (3)  ! jg
           call do_branch(to_signed(a) > to_signed(b), instr)
 
-        case (4)  ! dec_chk
-          val = to_signed(var_read(a)) - 1
-          call var_write(a, iand(val, 65535))
+        case (4)  ! dec_chk (indirect variable reference)
+          if (a == 0) then
+            val = to_signed(stack_peek()) - 1
+          else
+            val = to_signed(var_read(a)) - 1
+          end if
+          call var_indirect_write(a, iand(val, 65535))
           call do_branch(to_signed(iand(val, 65535)) < to_signed(b), instr)
 
-        case (5)  ! inc_chk
-          val = to_signed(var_read(a)) + 1
-          call var_write(a, iand(val, 65535))
+        case (5)  ! inc_chk (indirect variable reference)
+          if (a == 0) then
+            val = to_signed(stack_peek()) + 1
+          else
+            val = to_signed(var_read(a)) + 1
+          end if
+          call var_indirect_write(a, iand(val, 65535))
           call do_branch(to_signed(iand(val, 65535)) > to_signed(b), instr)
 
         case (6)  ! jin - test if a is child of b
@@ -307,8 +315,8 @@ contains
         case (12) ! clear_attr
           call obj_clear_attr(a, b)
 
-        case (13) ! store
-          call var_write(a, b)
+        case (13) ! store (indirect variable reference)
+          call var_indirect_write(a, b)
 
         case (14) ! insert_obj
           call obj_insert(a, b)
@@ -413,13 +421,21 @@ contains
           val = obj_get_prop_len(a)
           call var_write(instr%store_var, val)
 
-        case (5)  ! inc
-          val = to_signed(var_read(a)) + 1
-          call var_write(a, iand(val, 65535))
+        case (5)  ! inc (indirect variable reference)
+          if (a == 0) then
+            val = to_signed(stack_peek()) + 1
+          else
+            val = to_signed(var_read(a)) + 1
+          end if
+          call var_indirect_write(a, iand(val, 65535))
 
-        case (6)  ! dec
-          val = to_signed(var_read(a)) - 1
-          call var_write(a, iand(val, 65535))
+        case (6)  ! dec (indirect variable reference)
+          if (a == 0) then
+            val = to_signed(stack_peek()) - 1
+          else
+            val = to_signed(var_read(a)) - 1
+          end if
+          call var_indirect_write(a, iand(val, 65535))
 
         case (7)  ! print_addr
           call print_zstr(a, dummy)
@@ -568,7 +584,12 @@ contains
           call do_read(operands, instr)
 
         case (5)  ! print_char
-          call output_char(char(iand(operands(1), 255)))
+          val = iand(operands(1), 65535)
+          if (val == 13) then
+            call output_char(char(10))  ! ZSCII 13 = newline
+          else
+            call output_char(char(iand(val, 255)))
+          end if
 
         case (6)  ! print_num
           call print_number(to_signed(operands(1)))
