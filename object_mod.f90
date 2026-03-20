@@ -36,6 +36,11 @@ contains
     integer, intent(in) :: obj
     integer :: addr
 
+    if (obj <= 0) then
+      addr = 0
+      return
+    end if
+
     if (hdr_version <= 3) then
       ! Defaults table: 31 words (62 bytes), then 9-byte entries
       addr = hdr_object_table + 62 + (obj - 1) * 9
@@ -48,6 +53,10 @@ contains
   function obj_get_parent(obj) result(parent)
     integer, intent(in) :: obj
     integer :: parent, base
+    if (obj == 0) then
+      parent = 0
+      return
+    end if
     base = obj_addr(obj)
     if (hdr_version <= 3) then
       parent = mem_read_byte(base + 4)
@@ -59,6 +68,10 @@ contains
   function obj_get_sibling(obj) result(sib)
     integer, intent(in) :: obj
     integer :: sib, base
+    if (obj == 0) then
+      sib = 0
+      return
+    end if
     base = obj_addr(obj)
     if (hdr_version <= 3) then
       sib = mem_read_byte(base + 5)
@@ -70,6 +83,10 @@ contains
   function obj_get_child(obj) result(child)
     integer, intent(in) :: obj
     integer :: child, base
+    if (obj == 0) then
+      child = 0
+      return
+    end if
     base = obj_addr(obj)
     if (hdr_version <= 3) then
       child = mem_read_byte(base + 6)
@@ -81,6 +98,7 @@ contains
   subroutine obj_set_parent(obj, val)
     integer, intent(in) :: obj, val
     integer :: base
+    if (obj == 0) return
     base = obj_addr(obj)
     if (hdr_version <= 3) then
       call mem_write_byte(base + 4, val)
@@ -92,6 +110,7 @@ contains
   subroutine obj_set_sibling(obj, val)
     integer, intent(in) :: obj, val
     integer :: base
+    if (obj == 0) return
     base = obj_addr(obj)
     if (hdr_version <= 3) then
       call mem_write_byte(base + 5, val)
@@ -103,6 +122,7 @@ contains
   subroutine obj_set_child(obj, val)
     integer, intent(in) :: obj, val
     integer :: base
+    if (obj == 0) return
     base = obj_addr(obj)
     if (hdr_version <= 3) then
       call mem_write_byte(base + 6, val)
@@ -116,6 +136,11 @@ contains
     logical :: is_set
     integer :: base, byte_idx, bit_idx, byte_val
 
+    if (obj == 0) then
+      is_set = .false.
+      return
+    end if
+
     base = obj_addr(obj)
     byte_idx = attr / 8
     bit_idx = 7 - mod(attr, 8)  ! MSB first
@@ -126,6 +151,8 @@ contains
   subroutine obj_set_attr(obj, attr)
     integer, intent(in) :: obj, attr
     integer :: base, byte_idx, bit_idx, byte_val
+
+    if (obj == 0) return
 
     base = obj_addr(obj)
     byte_idx = attr / 8
@@ -139,6 +166,8 @@ contains
     integer, intent(in) :: obj, attr
     integer :: base, byte_idx, bit_idx, byte_val
 
+    if (obj == 0) return
+
     base = obj_addr(obj)
     byte_idx = attr / 8
     bit_idx = 7 - mod(attr, 8)
@@ -151,6 +180,11 @@ contains
   function obj_prop_table(obj) result(addr)
     integer, intent(in) :: obj
     integer :: addr, base
+
+    if (obj == 0) then
+      addr = 0
+      return
+    end if
 
     base = obj_addr(obj)
     if (hdr_version <= 3) then
@@ -167,6 +201,12 @@ contains
     integer, intent(out) :: addr
     logical, intent(out) :: has_name
     integer :: prop_addr, name_len
+
+    if (obj == 0) then
+      addr = 0
+      has_name = .false.
+      return
+    end if
 
     prop_addr = obj_prop_table(obj)
     name_len = mem_read_byte(prop_addr)
@@ -203,6 +243,12 @@ contains
     integer, intent(out) :: prop_size
     integer :: data_addr
     integer :: addr, size_byte, pnum, name_words
+
+    if (obj == 0) then
+      data_addr = 0
+      prop_size = 0
+      return
+    end if
 
     addr = obj_prop_table(obj)
     ! Skip short name: first byte = word count of name text
@@ -293,6 +339,11 @@ contains
     integer :: next_prop
     integer :: addr, size_byte, pnum, psize, name_words
 
+    if (obj == 0) then
+      next_prop = 0
+      return
+    end if
+
     addr = obj_prop_table(obj)
     name_words = mem_read_byte(addr)
     addr = addr + 1 + name_words * 2
@@ -318,8 +369,7 @@ contains
         size_byte = mem_read_byte(addr)
         if (size_byte == 0) then
           write(*,'(A,I0,A,I0)') 'Error: property not found: obj=', obj, ' prop=', prop
-          next_prop = 0
-          return
+          stop 1
         end if
         pnum = iand(size_byte, 31)
         psize = ishft(size_byte, -5) + 1
@@ -328,8 +378,7 @@ contains
         size_byte = mem_read_byte(addr)
         if (size_byte == 0) then
           write(*,'(A,I0,A,I0)') 'Error: property not found: obj=', obj, ' prop=', prop
-          next_prop = 0
-          return
+          stop 1
         end if
         pnum = iand(size_byte, 63)
         if (iand(size_byte, 128) /= 0) then
@@ -406,7 +455,7 @@ contains
     data_addr = find_prop(obj, prop, psize)
     if (data_addr == 0) then
       write(*,'(A,I0,A,I0)') 'Error: put_prop - property not found: obj=', obj, ' prop=', prop
-      return
+      stop 1
     end if
 
     if (psize == 1) then

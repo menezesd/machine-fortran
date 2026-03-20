@@ -58,10 +58,8 @@ contains
     base = 0
     if (fp > 0) base = frames(fp)%stack_base
     if (sp <= base) then
-      ! Silently return 0 on underflow - some games trigger this
-      ! through status line / window management paths
-      val = 0
-      return
+      write(*,*) 'Error: stack underflow'
+      stop 1
     end if
     val = stack(sp)
     sp = sp - 1
