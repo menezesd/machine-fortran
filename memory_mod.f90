@@ -93,14 +93,15 @@ contains
   end function mem_read_byte
 
   ! Write byte to address
-  ! The spec says static memory is read-only, but games like Balances
-  ! modify dictionary entries (in static memory) to add verb flags for
-  ! dynamically learned spells. Real interpreters allow this.
   subroutine mem_write_byte(addr, val)
     integer, intent(in) :: addr, val
 
     if (addr < 0 .or. addr >= mem_size) then
       return
+    end if
+    if (addr >= mem_static_base) then
+      write(*,'(A,Z8)') 'Error: illegal write to static memory at $', addr
+      stop 1
     end if
     memory(addr) = int(val, 1)
   end subroutine mem_write_byte

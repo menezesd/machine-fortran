@@ -44,15 +44,95 @@ module execute_mod
 contains
 
   subroutine exec_init()
+    integer :: flags2
+
     exec_pc = hdr_initial_pc
     exec_running = .true.
     call stack_init()
     output_stream1 = .true.
-    output_stream2 = .false.
+    flags2 = mem_read_word(16)
+    output_stream2 = (iand(flags2, 1) /= 0)
     stream3_depth = 0
     current_window = 0
     undo_valid = .false.
   end subroutine exec_init
+
+  subroutine set_transcript_state(enabled)
+    logical, intent(in) :: enabled
+    integer :: flags2
+
+    output_stream2 = enabled
+    flags2 = mem_read_word(16)
+    if (enabled) then
+      flags2 = ior(flags2, 1)
+    else
+      flags2 = iand(flags2, not(1))
+    end if
+    call mem_write_word(16, flags2)
+  end subroutine set_transcript_state
+
+  subroutine checked_store_byte(addr, val)
+    integer, intent(in) :: addr, val
+
+    if (addr >= mem_static_base) then
+      write(*,'(A,Z6)') 'Error: storeb to static memory at $', addr
+      exec_running = .false.
+      return
+    end if
+    call mem_write_byte(addr, val)
+  end subroutine checked_store_byte
+
+  subroutine checked_store_word(addr, val)
+    integer, intent(in) :: addr, val
+
+    if (addr >= mem_static_base .or. addr + 1 >= mem_static_base) then
+      write(*,'(A,Z6)') 'Error: storew to static memory at $', addr
+      exec_running = .false.
+      return
+    end if
+    call mem_write_word(addr, val)
+  end subroutine checked_store_word
+
+  subroutine do_encode_text(operands)
+    integer, intent(in) :: operands(8)
+    integer :: zscii_addr, text_len, from_pos, coded_addr, i, actual_len, enc_words
+    integer :: encoded(3)
+    character(len=256) :: text_buf
+
+    zscii_addr = operands(1)
+    text_len = operands(2)
+    from_pos = operands(3)
+    coded_addr = operands(4)
+
+    actual_len = max(0, min(text_len, len(text_buf)))
+    text_buf = ''
+
+    do i = 1, actual_len
+      text_buf(i:i) = text_zscii_to_char(mem_read_byte(zscii_addr + from_pos + i - 1))
+    end do
+
+    call text_encode(text_buf, actual_len, encoded, enc_words)
+    do i = 1, enc_words
+      call mem_write_word(coded_addr + (i - 1) * 2, encoded(i))
+    end do
+  end subroutine do_encode_text
+
+  function verify_story_checksum() result(ok)
+    logical :: ok
+    integer :: checksum, limit, i
+
+    if (hdr_version < 3 .or. hdr_file_length == 0) then
+      ok = .false.
+      return
+    end if
+
+    limit = min(hdr_file_length, mem_size)
+    checksum = 0
+    do i = 64, limit - 1
+      checksum = iand(checksum + mem_read_byte(i), 65535)
+    end do
+    ok = (checksum == hdr_checksum)
+  end function verify_story_checksum
 
   ! Convert packed address to byte address
   function unpack_addr(packed, is_string) result(addr)
@@ -514,8 +594,10 @@ contains
           call do_restore(instr)
 
         case (7)  ! restart
+          val = iand(mem_read_word(16), 3)
           call mem_load_story(mem_story_filename, dummy)
           call header_init()
+          call mem_write_word(16, ior(iand(mem_read_word(16), not(3)), val))
           call exec_init()
 
         case (8)  ! ret_popped
@@ -541,7 +623,7 @@ contains
           continue
 
         case (13) ! verify
-          call do_branch(.true., instr)  ! assume valid
+          call do_branch(verify_story_checksum(), instr)
 
         case (15) ! piracy
           call do_branch(.true., instr)  ! always pass
@@ -572,10 +654,10 @@ contains
           call call_routine(operands(1), args, num_args, instr%store_var)
 
         case (1)  ! storew
-          call mem_write_word(operands(1) + operands(2) * 2, operands(3))
+          call checked_store_word(operands(1) + operands(2) * 2, operands(3))
 
         case (2)  ! storeb
-          call mem_write_byte(operands(1) + operands(2), operands(3))
+          call checked_store_byte(operands(1) + operands(2), operands(3))
 
         case (3)  ! put_prop
           call obj_put_prop(operands(1), operands(2), operands(3))
@@ -671,9 +753,9 @@ contains
           case (-1)
             output_stream1 = .false.
           case (2)
-            output_stream2 = .true.
+            call set_transcript_state(.true.)
           case (-2)
-            output_stream2 = .false.
+            call set_transcript_state(.false.)
           case (3)
             if (instr%num_operands >= 2) then
               if (stream3_depth >= 16) then
@@ -741,8 +823,7 @@ contains
           call do_tokenise(operands, instr%num_operands)
 
         case (28) ! encode_text
-          ! Stub
-          continue
+          call do_encode_text(operands)
 
         case (29) ! copy_table
           call do_copy_table(operands)
@@ -983,6 +1064,17 @@ contains
     text_buf_addr = operands(1)
     parse_buf_addr = operands(2)
 
+    if (text_buf_addr < 0 .or. text_buf_addr + 2 >= mem_size) then
+      write(*,*) 'Error: text buffer too small for read'
+      exec_running = .false.
+      return
+    end if
+    if (parse_buf_addr /= 0 .and. (parse_buf_addr < 0 .or. parse_buf_addr + 5 >= mem_size)) then
+      write(*,*) 'Error: parse buffer too small for read'
+      exec_running = .false.
+      return
+    end if
+
     if (hdr_version <= 4) then
       ! V1-4: first byte is max chars (including terminator)
       max_chars = mem_read_byte(text_buf_addr) - 1
@@ -1065,7 +1157,6 @@ contains
     dict_entry_len = mem_read_byte(dict_addr + 1 + sep_count)
     ! num_entries is signed: negative means unsorted dictionary
     dict_num_entries = to_signed(mem_read_word(dict_addr + 2 + sep_count))
-    if (dict_num_entries < 0) dict_num_entries = -dict_num_entries
     dict_entries_start = dict_addr + 4 + sep_count
 
     max_tokens = mem_read_byte(parse_addr)
@@ -1148,11 +1239,37 @@ contains
     integer, intent(in) :: encoded(:), enc_words
     integer, intent(in) :: entries_start, entry_len, num_entries
     integer :: addr
-    integer :: lo, hi, mid, j, eaddr, dict_word, cmp
+    integer :: lo, hi, mid, j, eaddr, dict_word, cmp, entry_count
+    logical :: sorted
 
     addr = 0
+    sorted = (num_entries >= 0)
+    entry_count = abs(num_entries)
+
+    if (.not. sorted) then
+      do mid = 0, entry_count - 1
+        eaddr = entries_start + mid * entry_len
+        cmp = 0
+        do j = 1, enc_words
+          dict_word = mem_read_word(eaddr + (j-1) * 2)
+          if (dict_word < encoded(j)) then
+            cmp = -1
+            exit
+          else if (dict_word > encoded(j)) then
+            cmp = 1
+            exit
+          end if
+        end do
+        if (cmp == 0) then
+          addr = eaddr
+          return
+        end if
+      end do
+      return
+    end if
+
     lo = 0
-    hi = num_entries - 1
+    hi = entry_count - 1
 
     do while (lo <= hi)
       mid = (lo + hi) / 2

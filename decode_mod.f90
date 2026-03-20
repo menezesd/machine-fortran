@@ -3,6 +3,7 @@
 
 module decode_mod
   use memory_mod
+  use header_mod, only: hdr_version
   implicit none
   private
   public :: decode_instruction, decoded_instr, &
@@ -83,8 +84,8 @@ contains
       end if
       instr%opcode = iand(opbyte, 15)
 
-      ! Handle extended form: $BE
-      if (opbyte == 190) then  ! $BE
+      ! Handle extended form: $BE (legal only in V5+)
+      if (opbyte == 190 .and. hdr_version >= 5) then  ! $BE
         instr%form = FORM_EXT
         instr%op_count_class = COUNT_VAR
         instr%opcode = mem_read_byte(addr)
