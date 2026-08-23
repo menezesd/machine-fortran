@@ -45,8 +45,15 @@ contains
 
   subroutine exec_init()
     integer :: flags2
+    integer :: no_args(0)
 
-    exec_pc = hdr_initial_pc
+    if (hdr_version == 6) then
+      ! V6: execution begins by calling the "main" routine whose packed
+      ! address is stored in the header at $06 (spec section 6.4)
+      call call_routine(hdr_initial_pc, no_args, 0, -1)
+    else
+      exec_pc = hdr_initial_pc
+    end if
     exec_running = .true.
     call stack_init()
     output_stream1 = .true.
@@ -229,6 +236,11 @@ contains
     ! Read routine header
     num_locals = mem_read_byte(routine_addr)
     routine_addr = routine_addr + 1
+    if (num_locals > 15) then
+      write(*,'(A,I0)') 'Error: routine declares more than 15 locals: ', num_locals
+      exec_running = .false.
+      return
+    end if
 
     init_vals = 0
     if (hdr_version <= 4) then
@@ -315,15 +327,6 @@ contains
       ! Resolve variable operands (reading from variables, including stack pops)
       do i = 1, instr%num_operands
         if (instr%op_types(i) == OP_VAR) then
-          if (instr%operands(i) == 0) then
-            ! About to pop stack - check if this will underflow
-            val = 0
-            if (fp > 0) val = frames(fp)%stack_base
-            if (sp <= val) then
-              write(*,'(A,Z6,A,I0,A,I0)') 'TRACE: underflow at PC=$', exec_pc, &
-                ' class=', instr%op_count_class, ' op=', instr%opcode
-            end if
-          end if
           instr%operands(i) = var_read(instr%operands(i))
         end if
         operands(i) = instr%operands(i)
@@ -471,7 +474,7 @@ contains
           call return_routine(a)
 
         case default
-          write(*,'(A,I0,A,Z2)') 'Unknown 2OP:', instr%opcode, ' at $', exec_pc
+          write(*,'(A,I0,A,Z6)') 'Unknown 2OP:', instr%opcode, ' at $', exec_pc
           exec_running = .false.
         end select
 
@@ -561,7 +564,7 @@ contains
           end if
 
         case default
-          write(*,'(A,I0,A,Z2)') 'Unknown 1OP:', instr%opcode, ' at $', exec_pc
+          write(*,'(A,I0,A,Z6)') 'Unknown 1OP:', instr%opcode, ' at $', exec_pc
           exec_running = .false.
         end select
 
@@ -629,7 +632,7 @@ contains
           call do_branch(.true., instr)  ! always pass
 
         case default
-          write(*,'(A,I0,A,Z2)') 'Unknown 0OP:', instr%opcode, ' at $', exec_pc
+          write(*,'(A,I0,A,Z6)') 'Unknown 0OP:', instr%opcode, ' at $', exec_pc
           exec_running = .false.
         end select
 
@@ -835,7 +838,7 @@ contains
           call do_branch(frame_arg_count() >= operands(1), instr)
 
         case default
-          write(*,'(A,I0,A,Z2)') 'Unknown VAR:', instr%opcode, ' at $', exec_pc
+          write(*,'(A,I0,A,Z6)') 'Unknown VAR:', instr%opcode, ' at $', exec_pc
           exec_running = .false.
         end select
 
@@ -879,9 +882,9 @@ contains
 
     if (instr%form == FORM_EXT) then
       select case (instr%opcode)
-      case (0, 1, 2, 3, 4, 9, 10, 12, 19, 29)  ! save,restore,log_shift,art_shift,set_font,save_undo,restore_undo,check_unicode,get_wind_prop,buffer_screen
+      case (0, 1, 2, 3, 4, 9, 10, 12, 18, 28)  ! save,restore,log_shift,art_shift,set_font,save_undo,restore_undo,check_unicode,get_wind_prop,buffer_screen
         instr%has_store = .true.
-      case (6, 24, 27)  ! picture_data, push_stack, make_menu
+      case (6, 23, 26)  ! picture_data, push_stack, make_menu
         instr%has_branch = .true.
       end select
       return
@@ -1046,10 +1049,13 @@ contains
     integer, intent(out) :: result
     character :: ch
 
-    read(*,'(A1)', advance='no', eor=10) ch
+    read(*,'(A1)', advance='no', eor=10, end=20) ch
     result = iachar(ch)
     return
 10  result = 13  ! newline on end-of-record
+    return
+20  result = 13  ! EOF on input: quit gracefully
+    exec_running = .false.
   end subroutine read_single_char
 
   ! Read input (sread/aread)
@@ -1078,9 +1084,6 @@ contains
     if (hdr_version <= 4) then
       ! V1-4: first byte is max chars (including terminator)
       max_chars = mem_read_byte(text_buf_addr) - 1
-      ! Show status line for V3
-      ! Read line
-      write(*,'(A)', advance='no') '> '
       read(*,'(A)', end=100) input_line
       input_len = len_trim(input_line)
       if (input_len > max_chars) input_len = max_chars
@@ -1097,7 +1100,6 @@ contains
     else
       ! V5+: byte 0 = max chars, byte 1 = num chars already present
       max_chars = mem_read_byte(text_buf_addr)
-      write(*,'(A)', advance='no') '> '
       read(*,'(A)', end=100) input_line
       input_len = len_trim(input_line)
       if (input_len > max_chars) input_len = max_chars
