@@ -57,7 +57,8 @@ contains
 
   ! Decode Z-characters starting at byte address, return decoded string
   ! Also returns the address after the last word of encoded text.
-  subroutine text_decode(addr, output, output_len, next_addr)
+  ! (Recursive: decode_zchars calls back into here for abbreviations.)
+  recursive subroutine text_decode(addr, output, output_len, next_addr)
     integer, intent(in) :: addr
     character(len=*), intent(out) :: output
     integer, intent(out) :: output_len
