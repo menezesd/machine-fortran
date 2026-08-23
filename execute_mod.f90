@@ -858,11 +858,13 @@ contains
     call classify_instruction(instr)
 
     if (instr%has_store) then
+      instr%store_addr = addr
       instr%store_var = mem_read_byte(addr)
       addr = addr + 1
     end if
 
     if (instr%has_branch) then
+      instr%branch_addr = addr
       call read_branch(addr, instr%branch_on_true, instr%branch_offset, next_addr)
       addr = next_addr
     end if
@@ -1150,7 +1152,9 @@ contains
     if (present(no_overwrite)) skip_unknown = no_overwrite
 
     dict_addr = hdr_dictionary
-    if (present(alt_dict) .and. alt_dict /= 0) dict_addr = alt_dict
+    if (present(alt_dict)) then
+      if (alt_dict /= 0) dict_addr = alt_dict
+    end if
     ! Read dictionary header
     sep_count = mem_read_byte(dict_addr)
     do i = 1, sep_count
@@ -1494,14 +1498,23 @@ contains
   subroutine do_save(instr)
     type(decoded_instr), intent(in) :: instr
     character(len=256) :: save_filename
+    integer :: saved_pc
     logical :: ok
 
     write(*,'(A)', advance='no') 'Save filename: '
     read(*,'(A)', end=100) save_filename
     if (len_trim(save_filename) == 0) save_filename = 'save.qzl'
 
-    ! Save with PC pointing past this instruction
-    call quetzal_save(exec_pc, trim(save_filename), ok)
+    ! Per Quetzal spec 5.8 the saved PC points at the save instruction's
+    ! branch data (V1-3) or store byte (V4+), not past the instruction:
+    ! restoring replays that tail.
+    if (hdr_version <= 3) then
+      saved_pc = instr%branch_addr
+    else
+      saved_pc = instr%store_addr
+    end if
+    if (saved_pc < 0) saved_pc = exec_pc
+    call quetzal_save(saved_pc, trim(save_filename), ok)
 
     if (ok) then
       write(*,*) 'Saved.'
@@ -1534,6 +1547,8 @@ contains
     type(decoded_instr), intent(in) :: instr
     character(len=256) :: save_filename
     integer :: new_pc, store_var_num
+    integer :: branch_offset, next_addr
+    logical :: branch_on_true
     logical :: ok
 
     write(*,'(A)', advance='no') 'Restore filename: '
@@ -1544,22 +1559,28 @@ contains
 
     if (ok) then
       write(*,*) 'Restored.'
+      ! Per Quetzal spec 5.8 the saved PC points at the original save
+      ! instruction's branch data (V1-3) or store byte (V4+). Replay that
+      ! tail: branch as success, or store 2 ("restored") into the variable.
       exec_pc = new_pc
       if (hdr_version <= 3) then
-        ! V1-3: save uses branch. On restore, the saved PC points past
-        ! the save instruction's branch data. The game resumes from there.
-        ! The save instruction in the saved game already branched, so we
-        ! just continue execution from the restored PC.
-        continue
+        call read_branch(exec_pc, branch_on_true, branch_offset, next_addr)
+        exec_pc = next_addr
+        if (branch_on_true) then
+          ! Condition TRUE (save succeeded): take the branch if it
+          ! branches on true; fall through otherwise.
+          if (branch_offset == 0) then
+            call return_routine(0)
+          else if (branch_offset == 1) then
+            call return_routine(1)
+          else
+            exec_pc = exec_pc + branch_offset - 2
+          end if
+        end if
       else
-        ! V4+: store 2 into the save instruction's result variable.
-        ! The saved PC is past the full instruction. For EXT:0 save
-        ! (no branch, has store), the store variable byte is the last
-        ! byte before any operand-dependent data. We look it up:
-        ! the store byte is immediately before the saved PC for
-        ! instructions with store and no branch.
-        store_var_num = mem_read_byte(new_pc - 1)
-        call var_write(store_var_num, 2)  ! 2 = restore succeeded
+        store_var_num = mem_read_byte(exec_pc)
+        call var_write(store_var_num, 2)
+        exec_pc = exec_pc + 1
       end if
     else
       write(*,*) 'Restore failed.'

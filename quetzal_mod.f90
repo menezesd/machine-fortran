@@ -123,7 +123,7 @@ contains
     call write_cmem_chunk()
 
     ! ---- Stks chunk: stack frames ----
-    call write_stks_chunk(pc)
+    call write_stks_chunk()
 
     ! Patch FORM size (total size minus 8 bytes for "FORM" + size field)
     call buf_patch_long(form_size_pos, bufpos - 8)
@@ -218,53 +218,44 @@ contains
   end subroutine write_cmem_chunk
 
   ! Write Stks chunk: all stack frames and evaluation stack
-  subroutine write_stks_chunk(current_pc)
-    integer, intent(in) :: current_pc  ! unused but kept for API symmetry
+  subroutine write_stks_chunk()
     integer :: size_pos, chunk_start, chunk_end
-    integer :: f, i, eval_count, prev_base, arg_flags
+    integer :: f, i, eval_count, arg_flags, flags_byte, packed
 
     call buf_write_id('Stks')
     size_pos = bufpos + 1
     call buf_write_long(0)        ! placeholder
     chunk_start = bufpos
 
-    prev_base = 0
-
-    ! Write dummy frame for any stack values before the first call frame
-    ! (Quetzal spec requires this for V1-5 where execution starts without
-    ! a routine call)
-    if (fp > 0) then
-      eval_count = frames(1)%stack_base
-    else
-      eval_count = sp
-    end if
-    if (eval_count > 0 .or. fp == 0) then
-      ! Dummy frame: return PC = 0, no locals, no result
-      call buf_write_byte(0)    ! return PC byte 1
-      call buf_write_byte(0)    ! return PC byte 2
-      call buf_write_byte(0)    ! return PC byte 3
-      call buf_write_byte(0)    ! flags (no discard needed)
-      call buf_write_byte(0)    ! result variable
-      call buf_write_byte(0)    ! arg count
-      call buf_write_word(eval_count)  ! eval stack words
-      call buf_write_byte(0)    ! 0 locals
+    ! All versions except V6 begin execution outside any routine context,
+    ! so a dummy frame carrying just the top-level evaluation stack is
+    ! mandatory (Quetzal spec 4.11: six zero bytes, count word, values).
+    if (hdr_version <= 5) then
+      do i = 1, 6
+        call buf_write_byte(0)
+      end do
+      if (fp > 0) then
+        eval_count = frames(1)%stack_base
+      else
+        eval_count = sp
+      end if
+      call buf_write_word(eval_count)
       do i = 1, eval_count
         call buf_write_word(stack(i))
       end do
     end if
 
     do f = 1, fp
-      ! Return PC: 3 bytes
-      call buf_write_byte(iand(ishft(frames(f)%return_pc, -16), 255))
-      call buf_write_byte(iand(ishft(frames(f)%return_pc, -8), 255))
-      call buf_write_byte(iand(frames(f)%return_pc, 255))
+      ! Pack return PC into the top 24 bits of a long; low byte holds flags:
+      !   bit 4 = discard result, bits 0-3 = local variable count (spec 4.3)
+      flags_byte = iand(frames(f)%local_count, 15)
+      if (frames(f)%return_var == -1) flags_byte = ior(flags_byte, 16)
+      packed = ior(ishft(frames(f)%return_pc, 8), flags_byte)
 
-      ! Flags byte: bit 4 = discard result
-      if (frames(f)%return_var == -1) then
-        call buf_write_byte(16)   ! bit 4 set = discard
-      else
-        call buf_write_byte(0)
-      end if
+      call buf_write_byte(iand(ishft(packed, -24), 255))
+      call buf_write_byte(iand(ishft(packed, -16), 255))
+      call buf_write_byte(iand(ishft(packed, -8), 255))
+      call buf_write_byte(flags_byte)
 
       ! Result variable (0 if discarded)
       if (frames(f)%return_var == -1) then
@@ -288,13 +279,11 @@ contains
       end if
       call buf_write_word(eval_count)
 
-      ! Local variables (num_locals words)
-      call buf_write_byte(frames(f)%local_count)
+      ! Local variables, then evaluation stack words
       do i = 1, frames(f)%local_count
         call buf_write_word(frames(f)%locals(i))
       end do
 
-      ! Evaluation stack words for this frame
       do i = 1, eval_count
         call buf_write_word(stack(frames(f)%stack_base + i))
       end do
@@ -536,9 +525,9 @@ contains
     integer(1), intent(in) :: buf(:)
     integer, intent(in) :: pos, size
     logical, intent(out) :: ok
-    integer :: p, return_pc, flags_byte, result_var
-    integer :: arg_supplied, eval_count, num_locals
-    integer :: j, arg_count
+    integer :: p, lng, flags_byte, result_var, num_locals
+    integer :: arg_supplied, eval_count, j, arg_count
+    logical :: proc_flag
 
     ok = .false.
 
@@ -547,21 +536,44 @@ contains
     fp = 0
 
     p = pos
-    do while (p < pos + size)
-      ! Read return PC (3 bytes)
-      return_pc = ior(ior(ishft(read_byte_at(buf, p), 16), &
-                          ishft(read_byte_at(buf, p+1), 8)), &
-                      read_byte_at(buf, p+2))
-      p = p + 3
 
-      ! Flags
-      flags_byte = read_byte_at(buf, p)
-      p = p + 1
+    ! Non-V6 saves begin with a mandatory dummy frame holding the top-level
+    ! evaluation stack: six zero bytes, a count word, then count words
+    ! (Quetzal spec 4.11).
+    if (hdr_version /= 6) then
+      do j = 1, 6
+        if (read_byte_at(buf, p + j - 1) /= 0) then
+          write(*,*) 'Error: malformed dummy frame in save file'
+          return
+        end if
+      end do
+      p = p + 6
+      eval_count = read_word_at(buf, p)
+      p = p + 2
+      if (eval_count < 0 .or. sp + eval_count > ubound(stack, 1)) then
+        write(*,*) 'Error: too much evaluation stack in save file'
+        return
+      end if
+      do j = 1, eval_count
+        sp = sp + 1
+        stack(sp) = read_word_at(buf, p)
+        p = p + 2
+      end do
+    end if
 
-      ! Result variable
+    do while (p + 8 <= pos + size)
+      ! Return PC in top 24 bits of a long; low byte holds flags:
+      !   bit 4 = discard result, bits 0-3 = local variable count (spec 4.3)
+      lng = read_long_at(buf, p)
+      p = p + 4
+      flags_byte = iand(lng, 255)
+      proc_flag = (iand(flags_byte, 16) /= 0)
+      num_locals = iand(flags_byte, 15)
+
+      ! Result variable (meaningless when discarded)
       result_var = read_byte_at(buf, p)
       p = p + 1
-      if (iand(flags_byte, 16) /= 0) result_var = -1  ! discard
+      if (proc_flag) result_var = -1
 
       ! Arguments supplied bitmask
       arg_supplied = read_byte_at(buf, p)
@@ -571,45 +583,40 @@ contains
         if (iand(arg_supplied, ishft(1, j)) /= 0) arg_count = arg_count + 1
       end do
 
-      ! Evaluation stack count for this frame
+      ! Evaluation stack word count for this frame
       eval_count = read_word_at(buf, p)
       p = p + 2
 
-      ! Number of local variables
-      num_locals = read_byte_at(buf, p)
-      p = p + 1
-
-      if (return_pc == 0 .and. num_locals == 0 .and. fp == 0) then
-        ! Dummy frame: just put values on the stack, don't create a frame
-        ! Skip local variables (there are none)
-        do j = 1, eval_count
-          sp = sp + 1
-          stack(sp) = read_word_at(buf, p)
-          p = p + 2
-        end do
-      else
-        ! Create a real call frame
-        fp = fp + 1
-        frames(fp)%return_pc = return_pc
-        frames(fp)%return_var = result_var
-        frames(fp)%local_count = num_locals
-        frames(fp)%stack_base = sp
-        frames(fp)%arg_count = arg_count
-        frames(fp)%locals = 0
-
-        ! Read local variables
-        do j = 1, num_locals
-          frames(fp)%locals(j) = read_word_at(buf, p)
-          p = p + 2
-        end do
-
-        ! Read evaluation stack entries
-        do j = 1, eval_count
-          sp = sp + 1
-          stack(sp) = read_word_at(buf, p)
-          p = p + 2
-        end do
+      if (fp + 1 > ubound(frames, 1)) then
+        write(*,*) 'Error: too many stack frames in save file'
+        return
       end if
+      if (sp + eval_count > ubound(stack, 1)) then
+        write(*,*) 'Error: too much evaluation stack in save file'
+        return
+      end if
+
+      ! Create the call frame
+      fp = fp + 1
+      frames(fp)%return_pc = ishft(lng, -8)
+      frames(fp)%return_var = result_var
+      frames(fp)%local_count = num_locals
+      frames(fp)%stack_base = sp
+      frames(fp)%arg_count = arg_count
+      frames(fp)%locals = 0
+
+      ! Local variables
+      do j = 1, num_locals
+        frames(fp)%locals(j) = read_word_at(buf, p)
+        p = p + 2
+      end do
+
+      ! Evaluation stack entries
+      do j = 1, eval_count
+        sp = sp + 1
+        stack(sp) = read_word_at(buf, p)
+        p = p + 2
+      end do
     end do
 
     ok = .true.

@@ -40,6 +40,8 @@ module decode_mod
     integer :: branch_offset  ! branch offset
     logical :: has_text       ! does this instruction have inline text?
     integer :: text_addr      ! address of inline text
+    integer :: store_addr     ! address of the store byte (-1 if none)
+    integer :: branch_addr    ! address of branch data (-1 if none)
     integer :: next_pc        ! PC after this instruction
   end type decoded_instr
 
@@ -58,6 +60,8 @@ contains
     instr%has_text = .false.
     instr%operands = 0
     instr%op_types = OP_OMIT
+    instr%store_addr = -1
+    instr%branch_addr = -1
 
     opbyte = mem_read_byte(addr)
     addr = addr + 1
